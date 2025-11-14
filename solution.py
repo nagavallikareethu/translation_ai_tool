@@ -16,6 +16,7 @@ import tempfile
 import pathlib
 import html
 import asyncio
+import time
 from dotenv import load_dotenv
 from tqdm import tqdm
 
@@ -411,6 +412,40 @@ def main():
 
     print("\n🎉 All done! Check the 'outputs' folder for intermediate JSON files and the final PDF.")
     print("If you want images embedded in the PDF later, tell me and I will add that feature.\n")
+
+def run_solution_pipeline(pdf_path: str,
+                          target_language: str,
+                          output_dir: str = "outputs") -> dict:
+    """
+    Programmatic helper for generating solved & translated PDFs without using the CLI.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+    extracted_json_path = os.path.join(output_dir, f"extracted_{timestamp}.json")
+    extracted_images_dir = os.path.join(output_dir, f"extracted_images_{timestamp}")
+
+    pages = extract_pdf(
+        pdf_path,
+        output_json=extracted_json_path,
+        output_image_folder=extracted_images_dir
+    )
+
+    solved_items = solve_pages(pages)
+    translated_items = translate_items(solved_items, target_language)
+
+    lang_lower = target_language.lower()
+    output_pdf = os.path.join(output_dir, f"solutions_{lang_lower}_{timestamp}.pdf")
+    asyncio.run(render_pdf_from_data(translated_items, lang_lower, output_pdf))
+
+    return {
+        "extracted_json": extracted_json_path,
+        "extracted_images_dir": extracted_images_dir,
+        "solved_items": solved_items,
+        "translated_items": translated_items,
+        "output_pdf": output_pdf,
+    }
+
 
 if __name__ == "__main__":
     main()
