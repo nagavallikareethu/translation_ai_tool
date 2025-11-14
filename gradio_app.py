@@ -153,17 +153,19 @@ def trigger_mcq_generation(pdf_path: str | None,
         source_pdf = pdf_path
     else:
         source_pdf = None
-        if not dynamic_text.strip():
-            return "⚠️ Provide dynamic text when using text-only mode.", "", None
+        final_topic = (custom_topic.strip() or topic_choice or "").strip()
+        if not (dynamic_text.strip() or final_topic):
+            return "⚠️ Provide a topic or some custom text when using text-only mode.", "", None
 
     final_topic = custom_topic.strip() or topic_choice
+    context_payload = dynamic_text.strip() or final_topic
     try:
         mcq_text, pdf_file = run_mcq_pipeline(
             pdf_path=source_pdf,
             num_questions=num_questions,
             language=language_name,
             topic=final_topic,
-            custom_context=dynamic_text,
+            custom_context=context_payload,
             output_dir=str(MCQ_DIR),
         )
         preview = mcq_text.replace("Answer:", "**Answer:**")
