@@ -137,14 +137,40 @@ def extract_pdf(input_pdf, output_json="extracted_data.json", output_image_folde
 # -------------------------
 # Solver (SymPy first, LLM fallback)
 # -------------------------
-def solve_pages(pages):
+QUESTION_SPLIT_PATTERN = re.compile(
+    r"(?:(?<=\n)|^)(?:\s*(?:Q|Question)?\s*(\d+)[\.\)]\s+)",
+    re.IGNORECASE
+)
+
+
+def split_questions(text: str):
+    """
+    Split a block of text into numbered question snippets.
+    """
+    if not text:
+        return []
+
+    parts = []
+    matches = list(QUESTION_SPLIT_PATTERN.finditer(text))
+    if not matches:
+        return [text.strip()]
+
+    for idx, match in enumerate(matches):
+        start = match.start()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        snippet = text[start:end].strip()
+        if snippet:
+            parts.append(snippet)
+    return parts
+
+
+def solve_units(question_units):
     results = []
-    for page in tqdm(pages, desc="Solving pages"):
-        text = str(page.get("text", "")).strip()
+    for unit in question_units:
+        text = unit.strip()
         if not text:
             continue
 
-        # 1) Try SymPy for simple equations
         sympy_solution = solve_math_equation(text)
         if sympy_solution:
             prompt = f"""
@@ -167,7 +193,6 @@ Return only 2-line explanation text.
             })
             continue
 
-        # 2) Fallback to LLM for MCQs / textual questions
         prompt = f"""
 You are an expert exam solver. Extract and solve all questions and MCQs present in the text below.
 For each question:
@@ -199,7 +224,19 @@ TEXT:
                 "method": "gemini_fallback"
             })
 
-    # Save solved file
+    return results
+
+
+def solve_pages(pages):
+    results = []
+    for page in tqdm(pages, desc="Solving pages"):
+        text = str(page.get("text", "")).strip()
+        if not text:
+            continue
+        question_units = split_questions(text)
+        solved = solve_units(question_units)
+        results.extend(solved)
+
     os.makedirs("outputs", exist_ok=True)
     solved_path = os.path.join("outputs", "solved_extracted_data.json")
     with open(solved_path, "w", encoding="utf-8") as f:
