@@ -137,10 +137,13 @@ def extract_pdf(input_pdf, output_json="extracted_data.json", output_image_folde
 # -------------------------
 # Solver (SymPy first, LLM fallback)
 # -------------------------
-QUESTION_SPLIT_PATTERN = re.compile(
-    r"(?:(?<=\n)|^)\s*(?:Q|Question)?\s*(\d+)[\.\)]\s+(?=[A-Za-z])",
+QUESTION_NUMBER_REGEX = re.compile(
+    r"^(?P<label>(?:Q(?:ues(?:tion)?)?\.?)?\s*(\d{1,3}))[\.\)\-–\s]+",
     re.IGNORECASE
 )
+OPTION_LINE_REGEX = re.compile(r"^\(?([A-E]|[1-5])[\).\s]+")
+DIRECTION_LINE_REGEX = re.compile(r"^direction\b", re.IGNORECASE)
+KEY_SECTION_REGEX = re.compile(r"^key\b", re.IGNORECASE)
 
 
 def split_questions(text: str):
@@ -150,20 +153,42 @@ def split_questions(text: str):
     if not text:
         return []
 
-    matches = list(QUESTION_SPLIT_PATTERN.finditer(text))
-    if not matches:
+    units = []
+    current_lines = []
+    current_number = None
+
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    for line in lines:
+        if not line:
+            continue
+        if KEY_SECTION_REGEX.match(line):
+            break
+        if DIRECTION_LINE_REGEX.match(line):
+            if current_lines:
+                units.append({"number": current_number, "text": " ".join(current_lines).strip()})
+                current_lines = []
+                current_number = None
+            continue
+
+        match = QUESTION_NUMBER_REGEX.match(line)
+        if match and not line.lower().startswith("direction"):
+            if current_lines:
+                units.append({"number": current_number, "text": " ".join(current_lines).strip()})
+                current_lines = []
+            current_number = match.group(2)
+            current_lines.append(line)
+            continue
+
+        if current_lines:
+            if OPTION_LINE_REGEX.match(line) or len(line) > 0:
+                current_lines.append(line)
+
+    if current_lines:
+        units.append({"number": current_number, "text": " ".join(current_lines).strip()})
+
+    if not units:
         return [{"number": None, "text": text.strip()}]
 
-    units = []
-    for idx, match in enumerate(matches):
-        start = match.start()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-        snippet = text[start:end].strip()
-        if snippet:
-            units.append({
-                "number": match.group(1),
-                "text": snippet
-            })
     return units
 
 
@@ -277,10 +302,12 @@ LANGUAGES = {
 def translate_items(items, target_lang):
     lang_lower = target_lang.lower()
     translated = []
-    for item in tqdm(items, desc=f"Translating → {target_lang}"):
+    for idx, item in enumerate(items, start=1):
         q = item.get("question_text", "")
         a = item.get("answer", "")
         e = item.get("explanation", "")
+        qid = item.get("question_number", idx)
+        print(f"[Translation] Processing question {qid} → {target_lang}")
 
         prompt = f"""
 Translate the following solved MCQ into {target_lang}.
@@ -302,24 +329,27 @@ Explanation: {e}
             parsed = extract_inner_json(response.text.strip())
             if parsed:
                 merged = {**item, **parsed}
+                print(f"  ✓ translated question {qid}")
             else:
                 merged = {
                     **item,
-                    f"question_text_{lang_lower}": q,
-                    f"answer_{lang_lower}": a,
-                    f"explanation_{lang_lower}": e,
+                    f"question_text_{lang_lower}": q or item.get("question_text", ""),
+                    f"answer_{lang_lower}": a or item.get("answer", ""),
+                    f"explanation_{lang_lower}": e or item.get("explanation", ""),
                     f"raw_translation_{lang_lower}": response.text.strip()
                 }
+                print(f"  ⚠ using fallback text for question {qid} (JSON parse failed)")
             translated.append(merged)
         except Exception as err:
             fallback = {
                 **item,
-                f"question_text_{lang_lower}": q,
-                f"answer_{lang_lower}": a,
-                f"explanation_{lang_lower}": e,
+                f"question_text_{lang_lower}": q or item.get("question_text", ""),
+                f"answer_{lang_lower}": a or item.get("answer", ""),
+                f"explanation_{lang_lower}": e or item.get("explanation", ""),
             }
             fallback[f"translation_error_{lang_lower}"] = str(err)
             translated.append(fallback)
+            print(f"  ❌ translation failed for question {qid}: {err}")
 
     out_file = os.path.join("outputs", f"translated_{lang_lower}_auto.json")
     with open(out_file, "w", encoding="utf-8") as f:
