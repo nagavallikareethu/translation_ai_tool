@@ -157,7 +157,7 @@ def trigger_mcq_generation(pdf_path: str | None,
         if not (dynamic_text.strip() or final_topic):
             return "⚠️ Provide a topic or some custom text when using text-only mode.", "", None
 
-    final_topic = custom_topic.strip() or topic_choice
+    final_topic = custom_topic.strip() or (topic_choice.strip() if isinstance(topic_choice, str) else "")
     context_payload = dynamic_text.strip() or final_topic
     try:
         mcq_text, pdf_file = run_mcq_pipeline(
