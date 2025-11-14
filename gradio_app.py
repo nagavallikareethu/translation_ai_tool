@@ -140,19 +140,26 @@ def trigger_solution(pdf_path: str | None, language_name: str):
 
 
 def trigger_mcq_generation(pdf_path: str | None,
+                           mode: str,
                            num_questions: int,
                            language_name: str,
                            topic_choice: str,
                            custom_topic: str,
                            dynamic_text: str):
-    ok, message = _ensure_pdf(pdf_path)
-    if not ok:
-        return message, "", None
+    if mode == "pdf":
+        ok, message = _ensure_pdf(pdf_path)
+        if not ok:
+            return message, "", None
+        source_pdf = pdf_path
+    else:
+        source_pdf = None
+        if not dynamic_text.strip():
+            return "⚠️ Provide dynamic text when using text-only mode.", "", None
 
     final_topic = custom_topic.strip() or topic_choice
     try:
         mcq_text, pdf_file = run_mcq_pipeline(
-            pdf_path=pdf_path,
+            pdf_path=source_pdf,
             num_questions=num_questions,
             language=language_name,
             topic=final_topic,
@@ -164,7 +171,8 @@ def trigger_mcq_generation(pdf_path: str | None,
             f"""
             ✅ Generated {num_questions} MCQs
             - Language: **{language_name}**
-            - Topic: **{final_topic or 'Derived from PDF'}**
+            - Mode: **{"PDF" if source_pdf else "Text-only"}**
+            - Topic: **{final_topic or 'Derived from input'}**
             - PDF: `{pdf_file}`
             """
         ).strip()
@@ -223,6 +231,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         )
 
     with gr.Tab("MCQ Generation"):
+        mcq_mode = gr.Radio(["pdf", "text"], value="pdf", label="Input Mode", info="Use uploaded PDF or custom text?")
         mcq_count = gr.Slider(5, 50, value=10, step=1, label="Number of MCQs")
         mcq_language = gr.Dropdown(
             MCQ_LANGUAGE_OPTIONS,
@@ -250,7 +259,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
 
         mcq_button.click(
             trigger_mcq_generation,
-            inputs=[pdf_state, mcq_count, mcq_language, topic_dropdown, custom_topic, dynamic_text],
+            inputs=[pdf_state, mcq_mode, mcq_count, mcq_language, topic_dropdown, custom_topic, dynamic_text],
             outputs=[mcq_status, mcq_preview, mcq_download],
         )
 

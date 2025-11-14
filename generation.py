@@ -43,28 +43,30 @@ def extract_text_from_pdf(pdf_path: str) -> str:
 # ======================================================
 # GEMINI PROMPT + CALL FUNCTIONS
 # ======================================================
-def _build_mcq_prompt(pdf_text: str,
+def _build_mcq_prompt(source_text: str,
                       n: int,
                       language: str,
                       topic: Optional[str] = None,
-                      custom_context: Optional[str] = None) -> str:
+                      custom_context: Optional[str] = None,
+                      input_mode: str = "pdf") -> str:
     topic_clause = (
         f"The MCQs must stay tightly aligned to the topic: **{topic}**."
         if topic else
-        "Derive the most relevant subtopics directly from the PDF."
+        "Derive the most relevant subtopics directly from the provided material."
     )
     extra_context = custom_context.strip() if custom_context else ""
     supplemental = (
-        f"\nSupplementary context (combine with the PDF content):\n{extra_context}\n"
+        f"\nSupplementary context:\n{extra_context}\n"
         if extra_context else
         "\nNo supplemental context was provided."
     )
+    source_label = "PDF extract" if input_mode == "pdf" else "User-provided text"
 
     return f"""
 You are an expert exam-question generator.
 
 Task:
-- Read the provided PDF extract and craft **{n} brand new MCQs** in {language}.
+- Read the provided {source_label} and craft **{n} brand new MCQs** in {language}.
 - {topic_clause}
 
 Hard Requirements:
@@ -72,17 +74,17 @@ Hard Requirements:
 - Every question must include four options labeled A, B, C, D.
 - After the options, explicitly state the answer exactly as `Answer: <Option Letter>`.
 - Use **only** the {language} language (no transliteration, no mixing).
-- Avoid reusing sentences verbatim from the PDF; paraphrase when needed.
-- Blend context from both the PDF and the supplemental text (if any).
+- Avoid reusing sentences verbatim from the source; paraphrase when needed.
+- Blend context from both the main source and the supplemental text (if any).
 
-Document content (truncated to 10k characters):
-{pdf_text[:10000]}
+Primary content (truncated to 10k characters):
+{source_text[:10000]}
 
 {supplemental}
 """.strip()
 
 
-def generate_mcqs_content(pdf_path: str,
+def generate_mcqs_content(pdf_path: Optional[str],
                           n: int,
                           language: str,
                           topic: Optional[str] = None,
@@ -90,20 +92,24 @@ def generate_mcqs_content(pdf_path: str,
     if language not in SUPPORTED_LANGUAGES:
         raise ValueError(f"Unsupported language '{language}'. Supported options: {', '.join(SUPPORTED_LANGUAGES)}")
 
-    pdf_text = extract_text_from_pdf(pdf_path)
-    if not pdf_text:
-        raise ValueError("⚠️ No readable text found in the PDF! Make sure it’s not just scanned images.")
+    if pdf_path:
+        source_text = extract_text_from_pdf(pdf_path)
+        if not source_text:
+            raise ValueError("⚠️ No readable text found in the PDF! Make sure it’s not just scanned images.")
+        mode = "pdf"
+    else:
+        source_text = (custom_context or "").strip()
+        if not source_text:
+            raise ValueError("⚠️ Provide either a PDF or custom text to generate MCQs.")
+        mode = "text"
 
-    prompt = _build_mcq_prompt(pdf_text, n, language, topic, custom_context)
+    prompt = _build_mcq_prompt(source_text, n, language, topic, custom_context, input_mode=mode)
     model = genai.GenerativeModel("gemini-2.5-pro")
     response = model.generate_content(prompt)
     return response.text
 
 
 def generate_mcqs(pdf_path: str, n: int, language: str) -> str:
-    """
-    Backward-compatible wrapper that mirrors the original function signature.
-    """
     return generate_mcqs_content(pdf_path, n, language)
 
 
@@ -166,7 +172,7 @@ def save_pdf(text: str, outpath: str | Path, lang: str) -> bool:
 # ======================================================
 # PROGRAMMATIC PIPELINE
 # ======================================================
-def run_mcq_pipeline(pdf_path: str,
+def run_mcq_pipeline(pdf_path: Optional[str],
                      num_questions: int,
                      language: str,
                      topic: Optional[str] = None,
@@ -180,7 +186,7 @@ def run_mcq_pipeline(pdf_path: str,
 
     mcq_text = generate_mcqs_content(pdf_path, num_questions, language, topic, custom_context)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    safe_name = Path(pdf_path).stem[:40].replace(" ", "_")
+    safe_name = Path(pdf_path).stem[:40].replace(" ", "_") if pdf_path else "custom_text"
     pdf_name = f"mcqs_{safe_name}_{language.lower()}_{timestamp}.pdf"
     pdf_path_out = output_dir / pdf_name
 
