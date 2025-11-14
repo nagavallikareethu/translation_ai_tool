@@ -138,36 +138,39 @@ def extract_pdf(input_pdf, output_json="extracted_data.json", output_image_folde
 # Solver (SymPy first, LLM fallback)
 # -------------------------
 QUESTION_SPLIT_PATTERN = re.compile(
-    r"(?:(?<=\n)|^)(?:\s*(?:Q|Question)?\s*(\d+)[\.\)]\s+)",
+    r"(?:(?<=\n)|^)\s*(?:Q|Question)?\s*(\d+)[\.\)]\s+(?=[A-Za-z])",
     re.IGNORECASE
 )
 
 
 def split_questions(text: str):
     """
-    Split a block of text into numbered question snippets.
+    Split a block of text into numbered question snippets, keeping options attached.
     """
     if not text:
         return []
 
-    parts = []
     matches = list(QUESTION_SPLIT_PATTERN.finditer(text))
     if not matches:
-        return [text.strip()]
+        return [{"number": None, "text": text.strip()}]
 
+    units = []
     for idx, match in enumerate(matches):
         start = match.start()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         snippet = text[start:end].strip()
         if snippet:
-            parts.append(snippet)
-    return parts
+            units.append({
+                "number": match.group(1),
+                "text": snippet
+            })
+    return units
 
 
 def solve_units(question_units):
     results = []
     for unit in question_units:
-        text = unit.strip()
+        text = unit.get("text", "").strip() if isinstance(unit, dict) else str(unit).strip()
         if not text:
             continue
 
@@ -185,12 +188,15 @@ Return only 2-line explanation text.
             except Exception as e:
                 explanation = f"Error generating explanation: {e}"
 
-            results.append({
+            entry = {
                 "question_text": text,
                 "answer": str(sympy_solution),
                 "explanation": explanation,
                 "method": "sympy"
-            })
+            }
+            if isinstance(unit, dict) and unit.get("number"):
+                entry["question_number"] = unit["number"]
+            results.append(entry)
             continue
 
         prompt = f"""
@@ -216,13 +222,22 @@ TEXT:
             except Exception:
                 # if JSON parsing fails, keep raw_output
                 parsed = [{"question_text": text, "raw_output": raw_output}]
-            results.extend(parsed)
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(unit, dict) and unit.get("number"):
+                        item.setdefault("question_number", unit["number"])
+                results.extend(parsed)
+            else:
+                results.append(parsed)
         except Exception as e:
-            results.append({
+            entry = {
                 "question_text": text,
                 "error": str(e),
                 "method": "gemini_fallback"
-            })
+            }
+            if isinstance(unit, dict) and unit.get("number"):
+                entry["question_number"] = unit["number"]
+            results.append(entry)
 
     return results
 
@@ -288,11 +303,23 @@ Explanation: {e}
             if parsed:
                 merged = {**item, **parsed}
             else:
-                merged = {**item, f"raw_translation_{lang_lower}": response.text.strip()}
+                merged = {
+                    **item,
+                    f"question_text_{lang_lower}": q,
+                    f"answer_{lang_lower}": a,
+                    f"explanation_{lang_lower}": e,
+                    f"raw_translation_{lang_lower}": response.text.strip()
+                }
             translated.append(merged)
         except Exception as err:
-            item[f"translation_error_{lang_lower}"] = str(err)
-            translated.append(item)
+            fallback = {
+                **item,
+                f"question_text_{lang_lower}": q,
+                f"answer_{lang_lower}": a,
+                f"explanation_{lang_lower}": e,
+            }
+            fallback[f"translation_error_{lang_lower}"] = str(err)
+            translated.append(fallback)
 
     out_file = os.path.join("outputs", f"translated_{lang_lower}_auto.json")
     with open(out_file, "w", encoding="utf-8") as f:
@@ -458,7 +485,7 @@ def render_pdf_from_solutions(items, lang, output_pdf):
         answer = item.get(f"answer_{lang_lower}") or item.get("answer", "")
         explanation = item.get(f"explanation_{lang_lower}") or item.get("explanation", "")
         content.append({
-            "number": idx,
+            "number": item.get("question_number", idx),
             "question": question.strip(),
             "answer": answer.strip(),
             "explanation": explanation.strip(),
