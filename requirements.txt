@@ -1,5 +1,5 @@
 # Core dependencies
-streamlit==1.28.0
+streamlit==1.7.0
 python-dotenv==1.0.0
 google-generativeai==0.3.0
 
@@ -18,3 +18,8 @@ playwright==1.40.0
 
 # Utilities
 tqdm==4.66.0
+
+deep-translator==1.9.2
+reportlab==3.6.1
+PyMuPDF==1.19.6
+python-dotenv==0.19.2

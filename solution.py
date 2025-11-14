@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# pipeline_no_ocr.py
+
 """
 Unified pipeline (NO OCR):
 1) Extract text + images from input PDF (PyMuPDF)

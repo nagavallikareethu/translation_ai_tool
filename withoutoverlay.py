@@ -12,7 +12,7 @@ import base64
 from pathlib import Path
 from typing import Dict, List, Any
 import io
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import re
 from datetime import datetime
 import time
@@ -1596,7 +1596,7 @@ class JSONTranslator:
             return None
 
 # ============================================================
-# PDF GENERATOR CLASS
+# PDF GENERATOR CLASS - WITH FONT FIXES
 # ============================================================
 class PDFGenerator:
     def __init__(self, json_data, output_pdf):
@@ -1610,12 +1610,21 @@ class PDFGenerator:
         self._register_fonts()
 
     def _register_fonts(self):
-        """Register custom fonts for ReportLab fallback"""
+        """Register custom fonts for ReportLab fallback with explicit names"""
+        self.font_name_map = {}
         try:
             for lang, font_path in FONTS.items():
                 if os.path.exists(font_path):
-                    pdfmetrics.registerFont(TTFont(lang.capitalize(), font_path))
-                    print(f"✅ Registered font: {lang}")
+                    internal_name = f"Font_{lang}"
+                    pdfmetrics.registerFont(TTFont(internal_name, font_path))
+                    self.font_name_map[lang] = internal_name
+                    print(f"✅ Registered font: {lang} -> {internal_name} ({font_path})")
+                else:
+                    print(f"⚠️ Font file not found: {font_path}")
+            
+            # Print available fonts for debugging
+            available_fonts = pdfmetrics.getRegisteredFontNames()
+            print(f"📝 Available ReportLab fonts: {available_fonts}")
         except Exception as e:
             print(f"⚠️ Could not register custom fonts: {e}")
 
@@ -1627,35 +1636,82 @@ class PDFGenerator:
 
     def detect_language(self, data):
         """Auto-detect which language is used in the JSON"""
-        sample = json.dumps(data, ensure_ascii=False).lower()
-        if "telugu" in sample:
+        # Check for translated content in the JSON to determine the actual language
+        sample = json.dumps(data, ensure_ascii=False)
+        
+        # Look for Hindi Unicode characters
+        hindi_chars = re.findall(r'[\u0900-\u097F]', sample)
+        # Look for Telugu Unicode characters  
+        telugu_chars = re.findall(r'[\u0C00-\u0C7F]', sample)
+        # Look for Odia Unicode characters
+        odia_chars = re.findall(r'[\u0B00-\u0B7F]', sample)
+        
+        print(f"🔍 Language detection analysis:")
+        print(f"   Hindi characters found: {len(hindi_chars)}")
+        print(f"   Telugu characters found: {len(telugu_chars)}") 
+        print(f"   Odia characters found: {len(odia_chars)}")
+        
+        # Return language with the most characters found
+        if hindi_chars and len(hindi_chars) > len(telugu_chars) and len(hindi_chars) > len(odia_chars):
+            print("✅ Detected language: Hindi")
+            return "hindi"
+        elif telugu_chars and len(telugu_chars) > len(hindi_chars) and len(telugu_chars) > len(odia_chars):
+            print("✅ Detected language: Telugu")
             return "telugu"
-        elif "hindi" in sample:
-            return "hindi" 
-        elif "odia" in sample or "oriya" in sample:
+        elif odia_chars and len(odia_chars) > len(hindi_chars) and len(odia_chars) > len(telugu_chars):
+            print("✅ Detected language: Odia")
             return "odia"
         else:
-            return "telugu"
+            # Fallback: check the filename or use default
+            if "hi" in str(data).lower():
+                print("✅ Detected language: Hindi (from filename)")
+                return "hindi"
+            elif "te" in str(data).lower():
+                print("✅ Detected language: Telugu (from filename)") 
+                return "telugu"
+            elif "or" in str(data).lower() or "odia" in str(data).lower():
+                print("✅ Detected language: Odia (from filename)")
+                return "odia"
+            else:
+                print("⚠️  Could not detect language, using Hindi as default")
+                return "hindi"
 
     def build_page_html(self, page_data, lang):
-        """Build HTML for a single page using reference code approach"""
-        font_file = FONTS.get(lang, FONTS["telugu"])
-        font_path = pathlib.Path(font_file).resolve().as_uri() if os.path.exists(font_file) else ""
+        """Build HTML for a single page with embedded base64 fonts"""
+        font_file = FONTS.get(lang, FONTS["hindi"])  # Default to Hindi instead of Telugu
+        font_path = pathlib.Path(font_file) if os.path.exists(font_file) else None
 
+        # Embed ALL fonts as base64 to ensure availability
+        font_face_css = ""
+        for font_lang, font_file_path in FONTS.items():
+            current_font_path = pathlib.Path(font_file_path)
+            if current_font_path.exists():
+                try:
+                    import base64
+                    b = current_font_path.read_bytes()
+                    b64 = base64.b64encode(b).decode("ascii")
+                    ext = current_font_path.suffix.lstrip('.').lower()
+                    mime = "font/ttf" if ext in ("ttf", "ttc") else f"font/{ext}"
+                    font_face_css += (
+                        f"@font-face {{ font-family: 'Font_{font_lang}'; src: url('data:{mime};base64,{b64}') format('truetype'); "
+                        f"font-weight: normal; font-style: normal; }}\n"
+                    )
+                    print(f"✅ Embedded font: {current_font_path.name} as Font_{font_lang}")
+                except Exception as e:
+                    print(f"⚠️ Could not embed font {current_font_path}: {e}")
+
+        # Add primary font for the detected language
+        primary_font = f"Font_{lang}"
+        
         css = f"""
-        @font-face {{
-            font-family: 'LangFont';
-            src: url('{font_path}') format('truetype');
-            font-weight: normal;
-            font-style: normal;
-        }}
+        {font_face_css}
         * {{
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }}
         body {{
-            font-family: 'LangFont', sans-serif;
+            font-family: '{primary_font}', 'Font_hindi', 'Font_telugu', 'Font_odia', sans-serif;
             background: white;
             color: black;
             position: relative;
@@ -1669,6 +1725,7 @@ class PDFGenerator:
             white-space: pre-wrap;
             background: transparent;
             color: black;
+            font-family: '{primary_font}', 'Font_hindi', 'Font_telugu', 'Font_odia', sans-serif;
         }}
         .image-element {{
             position: absolute;
@@ -1730,7 +1787,7 @@ class PDFGenerator:
             
             html_parts.append(
                 f'<div class="text-element" '
-                f'style="left:{x0}px; top:{y0}px; font-size:{font_size}px; background: transparent; color: black;">'
+                f'style="left:{x0}px; top:{y0}px; font-size:{font_size}px; background: transparent; color: black; font-family: \'{primary_font}\', \'Font_hindi\', \'Font_telugu\', \'Font_odia\', sans-serif;">'
                 f'{content}'
                 f'</div>'
             )
@@ -1880,7 +1937,7 @@ class PDFGenerator:
                     print(f"⚠️ Error rendering image: {e}")
 
     def draw_text(self, pdf, page_data):
-        """Draw text on PDF page"""
+        """Draw text on PDF page with proper font selection"""
         text_blocks = page_data.get("text_content", [])
         for block in text_blocks:
             translated_content = block.get("translated_content", "")
@@ -1889,9 +1946,15 @@ class PDFGenerator:
             if translated_content and translated_content.strip():
                 content = translated_content
                 print(f"✅ Using TRANSLATED: {content[:30]}...")
+                
+                # Auto-detect language from the actual translated content
+                content_lang = self._detect_language_from_text(content)
+                print(f"   Content language: {content_lang}")
+                
             else:
                 content = original_content
                 print(f"⚠️ No translation, using ORIGINAL: {content[:30]}...")
+                content_lang = "english"  # Default for untranslated content
 
             if not content:
                 continue
@@ -1900,15 +1963,48 @@ class PDFGenerator:
             y0 = block['position']['y0']
             font_size = block.get('font', {}).get('size', 12)
 
-            # Try to use custom font, fallback to Helvetica
+            # Use appropriate font based on content language
             try:
-                lang = self.detect_language(self.data)
-                font_name = lang.capitalize()
-                pdf.setFont(font_name, font_size)
-            except:
+                if content_lang == "hindi":
+                    font_name = self.font_name_map.get("hindi")
+                elif content_lang == "telugu":
+                    font_name = self.font_name_map.get("telugu") 
+                elif content_lang == "odia":
+                    font_name = self.font_name_map.get("odia")
+                else:
+                    font_name = None  # Use default for English/math
+                
+                if font_name:
+                    pdf.setFont(font_name, font_size)
+                    print(f"   Using font: {font_name} for {content_lang}")
+                else:
+                    pdf.setFont("Helvetica", font_size)
+                    print(f"   Using default font for {content_lang}")
+                    
+            except Exception as e:
+                print(f"   ⚠️ Font error, using Helvetica: {e}")
                 pdf.setFont("Helvetica", font_size)
 
             pdf.drawString(x0, y0, self.clean(content))
+
+    def _detect_language_from_text(self, text):
+        """Detect language from text content using Unicode ranges"""
+        if not text:
+            return "english"
+        
+        # Count characters from different scripts
+        hindi_count = len(re.findall(r'[\u0900-\u097F]', text))
+        telugu_count = len(re.findall(r'[\u0C00-\u0C7F]', text))
+        odia_count = len(re.findall(r'[\u0B00-\u0B7F]', text))
+        
+        if hindi_count > telugu_count and hindi_count > odia_count:
+            return "hindi"
+        elif telugu_count > hindi_count and telugu_count > odia_count:
+            return "telugu" 
+        elif odia_count > hindi_count and odia_count > telugu_count:
+            return "odia"
+        else:
+            return "english"
 
     def draw_layout_elements(self, pdf, page_data):
         """Draw layout elements (lines) on PDF page"""
@@ -2026,6 +2122,32 @@ class PDFProcessingPipeline:
         print(f"\n💡 All files are ready for use!")
 
 # ============================================================
+# FONT VERIFICATION FUNCTION
+# ============================================================
+def verify_fonts_setup():
+    """Verify all required fonts are available"""
+    print("\n🔍 FONT SETUP VERIFICATION:")
+    print("-" * 40)
+    
+    for lang, font_path in FONTS.items():
+        if os.path.exists(font_path):
+            print(f"✅ {lang}: {font_path}")
+        else:
+            print(f"❌ {lang}: MISSING - {font_path}")
+    
+    # Check if fonts directory exists
+    fonts_dir = Path("fonts")
+    if fonts_dir.exists():
+        available_fonts = list(fonts_dir.glob("*.ttf")) + list(fonts_dir.glob("*.otf"))
+        print(f"\n📁 Available fonts in fonts directory:")
+        for font in available_fonts:
+            print(f"   📄 {font.name}")
+    else:
+        print(f"\n❌ Fonts directory 'fonts' not found!")
+    
+    print("-" * 40)
+
+# ============================================================
 # MAIN EXECUTION
 # ============================================================
 def main():
@@ -2033,6 +2155,9 @@ def main():
     
     print("🎯 PDF PROCESSING PIPELINE - COMPLETE WORKFLOW")
     print("=" * 60)
+    
+    # Verify fonts before processing
+    verify_fonts_setup()
     
     # Get PDF file path
     pdf_path = input("Enter PDF file path (or press Enter for default): ").strip()
