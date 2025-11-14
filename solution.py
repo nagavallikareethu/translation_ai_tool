@@ -413,12 +413,52 @@ def main():
     print("\n🎉 All done! Check the 'outputs' folder for intermediate JSON files and the final PDF.")
     print("If you want images embedded in the PDF later, tell me and I will add that feature.\n")
 
+def render_pdf_from_solutions(items, lang, output_pdf):
+    content = []
+    lang_lower = lang.lower()
+    for idx, item in enumerate(items, start=1):
+        question = item.get(f"question_text_{lang_lower}") or item.get("question_text", "")
+        answer = item.get(f"answer_{lang_lower}") or item.get("answer", "")
+        explanation = item.get(f"explanation_{lang_lower}") or item.get("explanation", "")
+        content.append({
+            "number": idx,
+            "question": question.strip(),
+            "answer": answer.strip(),
+            "explanation": explanation.strip(),
+        })
+
+    html_sections = ["<!doctype html><html><head><meta charset='utf-8'>",
+                     "<style>body{font-family:Helvetica,Arial,sans-serif;padding:40px;line-height:1.5;}h2{color:#1f4d7a;}p{margin:4px 0;}hr{margin:18px 0;border:0;border-top:1px solid #ddd;}</style>",
+                     "</head><body>",
+                     f"<h1>Solutions ({lang.title()})</h1>"]
+    for block in content:
+        html_sections.append(f"<div><h2>Question {block['number']}</h2>")
+        html_sections.append(f"<p><strong>Question:</strong> {block['question']}</p>")
+        html_sections.append(f"<p><strong>Answer:</strong> {block['answer']}</p>")
+        html_sections.append(f"<p><strong>Explanation:</strong> {block['explanation']}</p>")
+        html_sections.append("<hr /></div>")
+    html_sections.append("</body></html>")
+
+    html_doc = "\n".join(html_sections)
+    tmpdir = tempfile.mkdtemp()
+    html_path = os.path.join(tmpdir, "solutions.html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html_doc)
+
+    async def _render():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            page = await browser.new_page()
+            await page.goto(pathlib.Path(html_path).resolve().as_uri())
+            await page.pdf(path=output_pdf, format="A4", margin={"top":"1cm","right":"1cm","bottom":"1cm","left":"1cm"}, print_background=True)
+            await browser.close()
+
+    asyncio.run(_render())
+
+
 def run_solution_pipeline(pdf_path: str,
                           target_language: str,
                           output_dir: str = "outputs") -> dict:
-    """
-    Programmatic helper for generating solved & translated PDFs without using the CLI.
-    """
     os.makedirs(output_dir, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
 
@@ -436,7 +476,7 @@ def run_solution_pipeline(pdf_path: str,
 
     lang_lower = target_language.lower()
     output_pdf = os.path.join(output_dir, f"solutions_{lang_lower}_{timestamp}.pdf")
-    asyncio.run(render_pdf_from_data(translated_items, lang_lower, output_pdf))
+    render_pdf_from_solutions(translated_items, target_language, output_pdf)
 
     return {
         "extracted_json": extracted_json_path,
