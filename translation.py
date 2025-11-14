@@ -2884,9 +2884,9 @@ def run_full_pipeline(pdf_path: str,
         print("📚 Generated PDFs    : Skipped (overlay disabled)")
     
     return {
-        "extracted_json": extracted_path,
-        "translations": translated_results,
-        "generated_pdfs": generated_pdfs,
+        "extracted_json": str(extracted_path),
+        "translations": [str(path) for path in translated_results],
+        "generated_pdfs": [str(path) for path in generated_pdfs],
     }
 
 
